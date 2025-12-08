@@ -2,8 +2,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from django.utils import timezone
 from .models import Reminder
 from .utils import send_notification
+from datetime import datetime as _dt
 
-scheduler = BackgroundScheduler()
+# make scheduler use Django's current timezone
+scheduler = BackgroundScheduler(timezone=timezone.get_current_timezone())
 
 def check_reminders():
     """Check DB for reminders whose combined date+time is <= now and not yet notified.
@@ -11,20 +13,24 @@ def check_reminders():
     This uses the current Reminder model which stores `date` and `time` separately.
     When a match is found we call `send_notification` (server log) and mark as notified.
     """
-    now = timezone.localtime()
+    now = timezone.localtime(timezone.now())
     # fetch candidates that are not yet notified
     candidates = Reminder.objects.filter(notified=False)
     for r in candidates:
         try:
-            dt = timezone.make_aware(__import__('datetime').datetime.combine(r.date, r.time), timezone.get_default_timezone())
+            combined = _dt.combine(r.date, r.time)
         except Exception:
-            # fallback: skip invalid entries
+            # invalid date/time — skip
             continue
+        # ensure timezone-aware using Django current timezone
+        if timezone.is_naive(combined):
+            combined = timezone.make_aware(combined, timezone.get_current_timezone())
+        # convert to localtime for comparison
         try:
-            dt_local = timezone.localtime(dt)
+            combined_local = timezone.localtime(combined)
         except Exception:
-            dt_local = dt
-        if dt_local <= now:
+            combined_local = combined
+        if combined_local <= now:
             # server-side notification (console/log) — real browser notifications require the client
             send_notification(r.medicine_name, r.dosage or '')
             r.notified = True
@@ -32,5 +38,6 @@ def check_reminders():
 
 def start():
     if not scheduler.running:
-        scheduler.add_job(check_reminders, 'interval', seconds=30)
+        # run immediately on start and then every 30s
+        scheduler.add_job(check_reminders, 'interval', seconds=30, next_run_time=timezone.now())
         scheduler.start()

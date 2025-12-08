@@ -146,10 +146,32 @@
       }
 
       function requestPermission(){
+        // make permission request async and update UI after user response
         if ("Notification" in window && Notification.permission !== 'granted'){
-          Notification.requestPermission();
+          try{
+            return Notification.requestPermission().then(()=>{ updateStatus(); });
+          }catch(e){
+            console.warn('requestPermission failed', e);
+          }
         }
+        updateStatus();
       }
+      
+      // One-time click handler: resume audio context and request Notification permission
+      // This ensures the browser treats the permission request as a user gesture.
+      (function setupOneClickUnlock(){
+        async function oneClickHandler(){
+          if(audioCtx){
+            try{ await audioCtx.resume(); audioUnlocked = true; }catch(e){ /* ignore */ }
+          }
+          if ("Notification" in window && Notification.permission !== 'granted'){
+            try{ await requestPermission(); }catch(e){ /* ignore */ }
+          }
+          // remove handler — we only need one user gesture
+          document.removeEventListener('click', oneClickHandler);
+        }
+        document.addEventListener('click', oneClickHandler, {once: true});
+      })();
 
       function updateStatus(){
         const supportEl = document.getElementById('notifSupport');
@@ -303,7 +325,7 @@
       // debug fetch removed from UI
 
       // start
-      requestPermission();
+      // do not request permission automatically on load; it will be requested on first user click
       fetchUpcoming();
       setInterval(fetchUpcoming, pollInterval);
     })();

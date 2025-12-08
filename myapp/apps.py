@@ -6,6 +6,6 @@ class MyappConfig(AppConfig):
     name = 'myapp'
 
     def ready(self):
-        if os.environ.get('RUN_MAIN') == 'true':
-            from .scheduler import start
-            start()
+        # start the reminder scheduler when the app loads
+        from . import scheduler
+        scheduler.start()
