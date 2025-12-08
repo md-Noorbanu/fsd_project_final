@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SHRS - Welcome</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #ff69b4, #00c6ff);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI';
+        }
+
+        .welcome-card {
+            background: white;
+            padding: 40px;
+            border-radius: 18px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+            text-align: center;
+        }
+
+        .welcome-card h2 {
+            font-weight: 700;
+            color: #003268;
+        }
+
+        .btn-custom {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 18px;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="welcome-card">
+    <h2>Welcome to SWNS</h2>
+    <p class="text-muted">Smart Wellness Notification System</p>
+
+    <a href="{% url 'login' %}" class="btn btn-primary btn-custom">Login</a>
+
+    <a href="{% url 'register' %}" class="btn btn-success btn-custom">Create Account</a>
+</div>
+
+</body>
+</html>
