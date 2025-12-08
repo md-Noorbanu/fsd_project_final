@@ -6,6 +6,7 @@ from myapp.forms import ReminderForm
 from .models import Member, Reminder, ReminderHistory
 from django.contrib.auth.models import User
 from django.http import JsonResponse, HttpResponseBadRequest
+from django.db.models import Q
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
@@ -170,21 +171,41 @@ def editReminder(request, id):
 
 @login_required
 def upcoming_reminders(request):
-    """Return JSON list of upcoming reminders (not yet notified) for the logged-in user."""
-    now = timezone.now()
-    # consider reminders within next 2 minutes to be tolerant of small clock skews
-    window = now + datetime.timedelta(seconds=120)
-    # also allow reminders slightly in the past (up to 5 minutes) to catch missed triggers
-    past_window = now - datetime.timedelta(seconds=300)
+    """Return JSON list of upcoming reminders (not yet notified) for the logged-in user.
 
-    debug_mode = request.GET.get('debug') in ('1', 'true', ' True')
+    Improvements:
+    - use server local time via `timezone.localtime()` for comparisons
+    - widen the look-ahead/past windows to be more forgiving (10 minutes)
+    - add per-reminder debug logging to help diagnose timezone/ownership issues
+    """
+    # use localtime to match server clock used for stored datetimes
+    now = timezone.localtime()
+    # consider reminders within next 10 minutes to be tolerant of small clock skews
+    window = now + datetime.timedelta(minutes=10)
+    # also allow reminders slightly in the past (up to 10 minutes) to catch missed triggers
+    past_window = now - datetime.timedelta(minutes=10)
+
+    # normalize debug flag (accept '1', 'true', 'yes' case-insensitive)
+    debug_mode = str(request.GET.get('debug', '')).strip().lower() in ('1', 'true', 'yes')
+
+    # useful debug logging to observe when the endpoint is called and by whom
+    try:
+        import logging
+        logger = logging.getLogger('myapp')
+        logger.debug('upcoming_reminders called: user=%s debug=%s', request.user.username if hasattr(request.user, 'username') else str(request.user), debug_mode)
+    except Exception:
+        # best-effort: avoid crashing if logging isn't available
+        print('upcoming_reminders called by', request.user, 'debug=', debug_mode)
 
     results = []
-    # base queryset — for normal mode restrict to user; debug mode optionally returns all
+    # base queryset — for normal mode restrict to reminders owned by the logged-in user.
+    # A reminder may be owned directly via `Reminder.user` or indirectly via `Reminder.member.user`.
     if debug_mode:
         reminders_qs = Reminder.objects.filter(notified=False)
     else:
-        reminders_qs = Reminder.objects.filter(user=request.user, notified=False)
+        reminders_qs = Reminder.objects.filter(notified=False).filter(
+            Q(user=request.user) | Q(member__user=request.user)
+        )
 
     for r in reminders_qs:
         # combine date and time into a datetime
@@ -199,6 +220,12 @@ def upcoming_reminders(request):
             except Exception:
                 # last resort: assume UTC
                 dt = timezone.make_aware(dt, timezone.utc)
+        # convert dt to server localtime for consistent comparisons
+        try:
+            dt = timezone.localtime(dt)
+        except Exception:
+            # if localtime conversion fails just leave dt as-is
+            pass
 
         # compute flags used for debugging
         in_window = (past_window <= dt <= window)
@@ -217,6 +244,13 @@ def upcoming_reminders(request):
                 'user_id': r.user_id,
             }
             results.append(item)
+        # log details for each candidate so we can see why something was/wasn't selected
+        try:
+            import logging
+            logger = logging.getLogger('myapp')
+            logger.debug('reminder candidate: id=%s dt=%s in_window=%s owner=%s notified=%s', r.id, getattr(dt, 'isoformat', lambda: str(dt))(), in_window, is_owner, r.notified)
+        except Exception:
+            print('reminder candidate:', r.id, getattr(dt, 'isoformat', lambda: str(dt))(), 'in_window=', in_window, 'owner=', is_owner, 'notified=', r.notified)
 
     # log a concise summary to server console for debugging
     if results:
@@ -227,14 +261,16 @@ def upcoming_reminders(request):
         except Exception:
             print('upcoming_reminders: found', len(results), 'candidates; debug=', debug_mode)
 
-    return JsonResponse({'reminders': results, 'debug': debug_mode})
+    return JsonResponse({'reminders': results, 'debug': debug_mode, 'count': len(results)})
 
 
 @login_required
 @require_POST
 def mark_reminder_notified(request, id):
     try:
-        r = Reminder.objects.get(id=id, user=request.user)
+        # allow marking a reminder as notified if the logged-in user is the owner
+        # either via Reminder.user or Reminder.member.user
+        r = Reminder.objects.get(Q(id=id) & (Q(user=request.user) | Q(member__user=request.user)))
     except Reminder.DoesNotExist:
         return HttpResponseBadRequest('invalid reminder')
     r.notified = True
@@ -294,13 +330,44 @@ def get_due_reminders(request):
     current_date = now.date()
     current_time = now.time()
 
-    reminders = Reminder.objects.filter(date=current_date, time=current_time, notified=False)
+    # find reminders matching today's date and a time up to the current minute
+    # (exact time match is brittle, so accept reminders whose time is <= current_time)
+    reminders = Reminder.objects.filter(date=current_date, notified=False)
 
     result = []
     for r in reminders:
-        result.append({
-            "title": r.title,
-            "description": r.description,
-        })
+        try:
+            # include reminders whose scheduled time is <= now
+            if r.time <= current_time:
+                result.append({
+                    "id": r.id,
+                    "title": r.medicine_name,
+                    "dosage": r.dosage,
+                    "member": r.member.name if r.member else None,
+                })
+        except Exception:
+            continue
 
     return JsonResponse({"reminders": result})
+
+
+@login_required
+def all_user_reminders(request):
+    """Return all reminders for the logged-in user (owned via Reminder.user or member.user).
+
+    Useful for debugging and for forcing notifications from the browser UI.
+    """
+    from django.db.models import Q
+    reminders = Reminder.objects.filter(Q(user=request.user) | Q(member__user=request.user))
+    out = []
+    for r in reminders:
+        out.append({
+            'id': r.id,
+            'title': r.medicine_name,
+            'date': str(r.date),
+            'time': str(r.time),
+            'dosage': r.dosage,
+            'notified': r.notified,
+            'member': r.member.name if r.member else None,
+        })
+    return JsonResponse({'reminders': out, 'count': len(out)})

@@ -6,16 +6,29 @@ from .utils import send_notification
 scheduler = BackgroundScheduler()
 
 def check_reminders():
-    now = timezone.now()
-    reminders = Reminder.objects.filter(
-        reminder_time__lte=now,
-        notified=False
-    )
+    """Check DB for reminders whose combined date+time is <= now and not yet notified.
 
-    for reminder in reminders:
-        send_notification(reminder.title, reminder.message)
-        reminder.notified = True
-        reminder.save()
+    This uses the current Reminder model which stores `date` and `time` separately.
+    When a match is found we call `send_notification` (server log) and mark as notified.
+    """
+    now = timezone.localtime()
+    # fetch candidates that are not yet notified
+    candidates = Reminder.objects.filter(notified=False)
+    for r in candidates:
+        try:
+            dt = timezone.make_aware(__import__('datetime').datetime.combine(r.date, r.time), timezone.get_default_timezone())
+        except Exception:
+            # fallback: skip invalid entries
+            continue
+        try:
+            dt_local = timezone.localtime(dt)
+        except Exception:
+            dt_local = dt
+        if dt_local <= now:
+            # server-side notification (console/log) — real browser notifications require the client
+            send_notification(r.medicine_name, r.dosage or '')
+            r.notified = True
+            r.save()
 
 def start():
     if not scheduler.running:

@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -75,7 +76,17 @@ WSGI_APPLICATION = 'mysite.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
+"""
+Database configuration
+
+Defaults to MySQL using the project's credentials. For local development you
+can select SQLite by setting the environment variable `USE_SQLITE=1` (or
+`true`/`yes`). This avoids having to install `mysqlclient` or run a local
+MySQL server.
+"""
+
+# MySQL (default)
+DEFAULT_DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'wellness_db',
@@ -85,6 +96,24 @@ DATABASES = {
         'PORT': '3306',
     }
 }
+
+# SQLite config for local development
+SQLITE_DATABASE = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+use_sqlite = os.environ.get('USE_SQLITE')
+if use_sqlite is None:
+    # Default to SQLite when DEBUG=True to make development simple.
+    use_sqlite = str(DEBUG)
+
+if str(use_sqlite).lower() in ('1', 'true', 'yes'):
+    DATABASES = SQLITE_DATABASE
+else:
+    DATABASES = DEFAULT_DATABASES
 
 
 # Password validation

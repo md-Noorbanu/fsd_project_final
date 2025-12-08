@@ -13,6 +13,7 @@ urlpatterns = [
     path('rempages/', views.rempages, name='rempages'),
     path('db-status/', views.db_status, name='db_status'),
     path('api/upcoming/', views.upcoming_reminders, name='api_upcoming_reminders'),
+    path('api/all/', views.all_user_reminders, name='api_all_reminders'),
     path('api/mark-notified/<int:id>/', views.mark_reminder_notified, name='api_mark_notified'),
     path('add-reminder/', views.add_reminder, name='add_reminder'),
 

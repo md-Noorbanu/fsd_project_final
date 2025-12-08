@@ -33,6 +33,9 @@
 
   <div class="container py-4">
 
+    <!-- ensure CSRF cookie is set for AJAX posts -->
+    <form id="csrfHelper" style="display:none">{% csrf_token %}</form>
+
     <!-- Debug info: shows last fetch time and number of reminders returned -->
     <div id="notificationDebug" class="container mb-3" style="display:none">
       <div class="alert alert-info">Last check: <span id="lastCheck">never</span> — Found <span id="lastCount">0</span> reminders</div>
@@ -65,10 +68,11 @@
       <div>
         <button id="enableAlerts" class="btn btn-outline-primary me-2">Enable Sound & Notifications</button>
         <button id="testAlert" class="btn btn-outline-success me-2">Test Alert</button>
-        <button id="debugFetch" class="btn btn-outline-secondary me-2">Debug Fetch</button>
+        
         <a href="{% url 'reminder' %}" class="btn btn-success px-3">+ Add New</a>
       </div>
     </div>
+    
 
     <!-- Reminder Cards -->
     <div class="row g-3">
@@ -162,15 +166,29 @@
       async function fetchUpcoming(debug=false){
         try{
           const url = '{% url "api_upcoming_reminders" %}' + (debug ? '?debug=1' : '');
-          const resp = await fetch(url, {credentials: 'same-origin'});
-          if(!resp.ok) return;
-          const data = await resp.json();
+          const resp = await fetch(url, {credentials: 'same-origin', cache: 'no-store'});
+          if(!resp.ok){
+            const txt = await resp.text().catch(()=>'<no response body>');
+            console.error('fetch upcoming non-ok', resp.status, txt);
+            const status = document.getElementById('notificationStatus');
+            if(status) status.innerHTML = '<div class="alert alert-danger">Fetch error: '+resp.status+'</div>';
+            return;
+          }
+          let data;
+          try{
+            data = await resp.json();
+          }catch(e){
+            console.error('invalid JSON from upcoming_reminders', e);
+            const status = document.getElementById('notificationStatus');
+            if(status) status.innerHTML = '<div class="alert alert-danger">Invalid server response (not JSON)</div>';
+            return;
+          }
           if(!data.reminders) return;
               console.log('upcoming fetch status', resp.status);
               console.log('upcoming data', data);
-              document.getElementById('notificationDebug').style.display = 'block';
-              document.getElementById('lastCheck').textContent = new Date().toLocaleString();
-              document.getElementById('lastCount').textContent = (data.reminders || []).length;
+              try{ document.getElementById('notificationDebug').style.display = 'block'; }catch(e){}
+              try{ document.getElementById('lastCheck').textContent = new Date().toLocaleString(); }catch(e){}
+              try{ document.getElementById('lastCount').textContent = (data.reminders || []).length; }catch(e){}
               (data.reminders || []).forEach(async (r) => {
             // show browser notification
             if ("Notification" in window){
@@ -231,14 +249,13 @@
               }
             }catch(e){ console.warn('mark-notified failed', e); }
           });
-          if(debug){
-            document.getElementById('debugOutput').style.display = 'block';
-            document.getElementById('debugJSON').textContent = JSON.stringify(data, null, 2);
-          }
+          // debug output removed in production build
         }catch(e){
           console.error('upcoming fetch error', e);
         }
       }
+
+          // show-all feature removed
 
       function getCookie(name) {
         const value = `; ${document.cookie}`;
@@ -283,15 +300,7 @@
         });
       }
 
-      // Debug fetch button: hits the endpoint with debug=1 and prints JSON
-      const debugBtn = document.getElementById('debugFetch');
-      if(debugBtn){
-        debugBtn.addEventListener('click', async function(){
-          debugBtn.textContent = 'Fetching...';
-          await fetchUpcoming(true);
-          debugBtn.textContent = 'Debug Fetch';
-        });
-      }
+      // debug fetch removed from UI
 
       // start
       requestPermission();
