@@ -1,4 +1,3 @@
-
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -21,6 +20,11 @@ class Reminder(models.Model):
     date = models.DateField()
     dosage = models.CharField(max_length=50)
     notified = models.BooleanField(default=False)
+    datetime = models.DateTimeField(help_text="Combined date and time for the reminder")
+    is_notified = models.BooleanField(default=False, help_text="Whether notification has been sent")
+
+    class Meta:
+        pass
 
     def __str__(self):
         return f"{self.medicine_name} - {self.member.name}"

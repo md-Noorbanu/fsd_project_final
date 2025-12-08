@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Reminders - SWNS</title>
+  <title>My Reminders - SHRS</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
@@ -21,14 +21,16 @@
 </head>
 
 <body class="bg-light">
-  <!-- Optional: drop an alarm audio file into your static files and set its src here -->
+  <!-- Optional: set src to an alarm sound in your static files -->
   <audio id="alarmSound" style="display:none"></audio>
-<div class="container mt-3">
+
+  <div class="container mt-3">
     <a href="{% url 'dashboard' %}" class="btn btn-secondary">Back</a>
-</div>
+  </div>
+
   <!-- Navbar -->
   <nav class="navbar navbar-dark bg-primary px-3">
-    <span class="navbar-brand fs-4 fw-bold">SWNS</span>
+    <span class="navbar-brand fs-4 fw-bold">SHRS</span>
   </nav>
 
   <div class="container py-4">
@@ -38,11 +40,20 @@
 
     <!-- Debug info: shows last fetch time and number of reminders returned -->
     <div id="notificationDebug" class="container mb-3" style="display:none">
-      <div class="alert alert-info">Last check: <span id="lastCheck">never</span> — Found <span id="lastCount">0</span> reminders</div>
+      <div class="alert alert-info">
+        Last check: <span id="lastCheck">never</span> — Found <span id="lastCount">0</span> reminders
+      </div>
+      <pre id="rawDebug" class="bg-light p-2" style="max-height:240px; overflow:auto; display:none"></pre>
     </div>
+
     <div id="notificationStatus" class="container mb-3">
-      <div class="alert alert-secondary">Notification support: <strong id="notifSupport">checking...</strong> — Permission: <strong id="notifPerm">unknown</strong> — Secure context: <strong id="secureCtx">?</strong></div>
+      <div class="alert alert-secondary">
+        Notification support: <strong id="notifSupport">checking...</strong> —
+        Permission: <strong id="notifPerm">unknown</strong> —
+        Secure context: <strong id="secureCtx">?</strong>
+      </div>
     </div>
+
     <!-- In-page modal popup for reminders -->
     <div class="modal fade" id="reminderModal" tabindex="-1" aria-labelledby="reminderModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
@@ -68,11 +79,10 @@
       <div>
         <button id="enableAlerts" class="btn btn-outline-primary me-2">Enable Sound & Notifications</button>
         <button id="testAlert" class="btn btn-outline-success me-2">Test Alert</button>
-        
+        <button id="forceCheck" class="btn btn-outline-secondary me-2">Force Check</button>
         <a href="{% url 'reminder' %}" class="btn btn-success px-3">+ Add New</a>
       </div>
     </div>
-    
 
     <!-- Reminder Cards -->
     <div class="row g-3">
@@ -100,236 +110,325 @@
       {% endfor %}
     </div>
   </div>
-          
-    <script>
-    // Poll server for upcoming reminders, show browser notifications and play a short beep.
-    (function(){
-      const pollInterval = 30000; // 30 sec
 
-      // WebAudio setup (will be resumed on user gesture)
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = AudioCtx ? new AudioCtx() : null;
-      let audioUnlocked = false;
-      // optional audio element (if you place an audio file in static and set its src)
-      const audioElem = document.getElementById('alarmSound');
+  <script>
+(function(){
+  const pollInterval = 10000; // 10 sec
 
-      function playBeep(){
-        if(!audioCtx) return;
-        try{
-          const o = audioCtx.createOscillator();
-          const g = audioCtx.createGain();
-          o.type = 'sine';
-          o.frequency.value = 880; // A5 beep
-          g.gain.value = 0.12;
-          o.connect(g);
-          g.connect(audioCtx.destination);
-          const now = audioCtx.currentTime;
-          o.start(now);
-          g.gain.exponentialRampToValueAtTime(0.0001, now + 0.8);
-          o.stop(now + 0.85);
-        }catch(e){
-          console.warn('beep failed', e);
-        }
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = AudioCtx ? new AudioCtx() : null;
+  let audioUnlocked = false;
+  const audioElem = document.getElementById('alarmSound');
+
+  // track notified IDs on this device
+  const notifiedKey = 'shrs_notified_ids_v1';
+  let notifiedIds = new Set();
+  try {
+    const raw = localStorage.getItem(notifiedKey);
+    if (raw) JSON.parse(raw).forEach(id => notifiedIds.add(String(id)));
+  } catch(e){ console.warn('load notified ids', e); }
+
+  function persistNotified(){
+    try {
+      localStorage.setItem(notifiedKey, JSON.stringify(Array.from(notifiedIds)));
+    } catch(e){}
+  }
+
+  function parseRemDate(r){
+    if (r.datetime) {
+      let s = String(r.datetime).trim();
+
+      // numeric timestamp (ms)
+      if (/^\d+$/.test(s)) {
+        const d = new Date(parseInt(s, 10));
+        return isNaN(d) ? null : d;
       }
 
-      function playSoundFallback(){
-        // prefer an audio element if present and has a source
-        if(audioElem && audioElem.src){
-          try{ audioElem.currentTime = 0; audioElem.play(); return; }catch(e){ /* fallback */ }
-        }
-        // else use WebAudio beep
-        if(audioCtx && !audioUnlocked){
-          audioCtx.resume().then(()=>{ audioUnlocked = true; playBeep(); }).catch(()=>{ playBeep(); });
-        } else {
-          playBeep();
-        }
+      // If format 'YYYY-MM-DD HH:MM:SS' (no timezone), convert to ISO and append IST offset
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+        s = s.replace(' ', 'T') + '+05:30';
+      } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) {
+        // naive T format w/o offset — treat as server local (IST)
+        s = s + '+05:30';
+      }
+      const d = new Date(s);
+      return isNaN(d) ? null : d;
+    }
+    return null;
+  }
+
+  function playBeep(){
+    if (!audioCtx) return;
+    try {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 880;
+      g.gain.value = 0.12;
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      o.start(now);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.8);
+      o.stop(now + 0.85);
+    } catch(e){ console.warn('beep failed', e); }
+  }
+
+  function playSoundFallback(){
+    if (audioElem && audioElem.src){
+      try {
+        audioElem.currentTime = 0;
+        audioElem.play();
+        return;
+      } catch(e){}
+    }
+    if (audioCtx && !audioUnlocked){
+      audioCtx.resume().then(()=>{
+        audioUnlocked = true;
+        playBeep();
+      }).catch(()=>{
+        playBeep();
+      });
+    } else {
+      playBeep();
+    }
+  }
+
+  function updateStatus(msg){
+    const supportEl = document.getElementById('notifSupport');
+    const permEl = document.getElementById('notifPerm');
+    const secureEl = document.getElementById('secureCtx');
+    const statusContainer = document.getElementById('notificationStatus');
+
+    if (supportEl) supportEl.textContent = ("Notification" in window) ? 'yes' : 'no';
+    if (permEl) permEl.textContent = ("Notification" in window) ? Notification.permission : 'n/a';
+    if (secureEl) secureEl.textContent =
+      (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+        ? 'yes' : 'no';
+
+    if (msg && statusContainer){
+      statusContainer.innerHTML = '<div class="alert alert-info">'+msg+'</div>';
+    }
+
+    if (statusContainer && secureEl && secureEl.textContent === 'no'){
+      statusContainer.innerHTML =
+        '<div class="alert alert-warning">This page is not in a secure context. ' +
+        'Browser notifications typically require HTTPS or localhost. Notifications may not work.</div>';
+    }
+  }
+
+  // unlock audio on first click
+  (function setupOneClickUnlock(){
+    async function oneClickHandler(){
+      if (audioCtx){
+        try {
+          await audioCtx.resume();
+          audioUnlocked = true;
+        } catch(e){}
+      }
+      document.removeEventListener('click', oneClickHandler);
+    }
+    document.addEventListener('click', oneClickHandler, {once: true});
+  })();
+
+  updateStatus();
+
+  async function fetchUpcoming(debug=false){
+    try{
+      const url = '{% url "api_upcoming_reminders" %}' + (debug ? '?debug=1' : '');
+      const resp = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' }
+      });
+
+      if (!resp.ok){
+        const status = document.getElementById('notificationStatus');
+        if (status) status.innerHTML = '<div class="alert alert-danger">Fetch error: '+resp.status+'</div>';
+        console.error('fetchUpcoming non-ok', resp.status);
+        return;
       }
 
-      function requestPermission(){
-        // make permission request async and update UI after user response
-        if ("Notification" in window && Notification.permission !== 'granted'){
+      const data = await resp.json();
+      const reminders = Array.isArray(data) ? data :
+                        (Array.isArray(data.reminders) ? data.reminders : []);
+
+      try { document.getElementById('notificationDebug').style.display = 'block'; } catch(e){}
+      try { document.getElementById('lastCheck').textContent = new Date().toLocaleString(); } catch(e){}
+      try { document.getElementById('lastCount').textContent = reminders.length; } catch(e){}
+
+      const rawDebug = document.getElementById('rawDebug');
+      if (rawDebug){
+        rawDebug.style.display = (debug || reminders.length === 0) ? 'block' : 'none';
+        rawDebug.textContent = JSON.stringify(data, null, 2);
+      }
+
+      if (reminders.length === 0) return;
+
+      reminders.forEach(async (r) => {
+        const id = String(r.id || r.pk || r.reminder_id || r._id || Math.random());
+
+        // backend already filtered to "due now", so everything returned is in window
+        const scheduledDate = parseRemDate(r);
+
+        if (notifiedIds.has(id)){
+          // best-effort: mark notified on server
           try{
-            return Notification.requestPermission().then(()=>{ updateStatus(); });
-          }catch(e){
-            console.warn('requestPermission failed', e);
+            fetch('{% url "api_mark_notified" 0 %}'.replace('/0/', '/' + id + '/'), {
+              method: 'POST',
+              headers: { 'X-CSRFToken': getCookie('csrftoken') },
+              credentials: 'same-origin'
+            });
+          } catch(e){}
+          return;
+        }
+
+        // show browser notification if allowed
+        let notifiedViaBrowser = false;
+        if ("Notification" in window && Notification.permission === 'granted'){
+          try{
+            const n = new Notification(
+              r.title || 'Reminder',
+              { body: r.dosage || '', tag: 'rem-'+id }
+            );
+            n.onclick = () => { window.focus(); };
+            notifiedViaBrowser = true;
+          } catch(e){
+            console.error('Notification creation failed', e);
+            updateStatus('Notification creation failed: ' + (e && e.message ? e.message : e));
           }
         }
+
+        // fallback: modal
+        if (!notifiedViaBrowser){
+          try{
+            const modalTitle = document.getElementById('reminderModalLabel');
+            const modalText = document.getElementById('reminderModalText');
+            const modalTime = document.getElementById('reminderModalTime');
+            if (modalTitle && modalText){
+              modalTitle.textContent = r.title || 'Reminder';
+              modalText.textContent = r.dosage || '';
+              modalTime.textContent = (scheduledDate ? scheduledDate.toLocaleString() : '');
+              var remModal = new bootstrap.Modal(document.getElementById('reminderModal'));
+              remModal.show();
+            }
+          } catch(e){
+            console.warn('popup error', e);
+            alert((r.title || 'Reminder') + '\n' + (r.dosage || ''));
+          }
+        }
+
+        playSoundFallback();
+
+        notifiedIds.add(id);
+        persistNotified();
+
+        try{
+          fetch('{% url "api_mark_notified" 0 %}'.replace('/0/', '/' + id + '/'), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': getCookie('csrftoken') },
+            credentials: 'same-origin'
+          });
+        } catch(e){ console.warn('mark-notified failed', e); }
+      });
+
+    } catch(e){
+      console.error('upcoming fetch error', e);
+    }
+  }
+
+  // Force-check button
+  const forceBtn = document.getElementById('forceCheck');
+  if (forceBtn){
+    forceBtn.addEventListener('click', async function(){
+      forceBtn.textContent = 'Checking...';
+      try{
+        await fetchUpcoming(true);
+      } finally{
+        setTimeout(()=>{ forceBtn.textContent = 'Force Check'; }, 1200);
+      }
+    });
+  }
+
+  function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+  }
+
+  // Enable alerts button
+  const enableBtn = document.getElementById('enableAlerts');
+  if (enableBtn){
+    enableBtn.addEventListener('click', async function(){
+      if (audioCtx){
+        try{
+          await audioCtx.resume();
+          audioUnlocked = true;
+        } catch(e){ console.warn('audio resume failed', e); }
+      }
+      if (!("Notification" in window)){
+        updateStatus('This browser does not support notifications.');
+      } else {
+        try{
+          const perm = await Notification.requestPermission();
+          updateStatus();
+          if (perm === 'granted'){
+            try{
+              new Notification('SHRS: Notifications enabled', { body: 'You will receive reminders.' });
+              updateStatus('Notifications enabled.');
+            } catch(e){
+              console.error('Immediate test notification failed', e);
+              updateStatus('Notification granted but creation failed — maybe insecure context or blocked.');
+            }
+            enableBtn.textContent = 'Alerts Enabled';
+            enableBtn.disabled = true;
+          } else if (perm === 'denied') {
+            updateStatus('Notifications denied. Enable them in browser site settings if you want them.');
+          } else {
+            updateStatus('Notification permission not granted yet.');
+          }
+        } catch(e){
+          console.warn('requestPermission failed', e);
+          updateStatus('Unable to request notification permission: ' + (e && e.message ? e.message : e));
+        }
+      }
+    });
+  }
+
+  // Test Alert button
+  const testBtn = document.getElementById('testAlert');
+  if (testBtn){
+    testBtn.addEventListener('click', async function(){
+      if ("Notification" in window && Notification.permission !== 'granted'){
+        await Notification.requestPermission();
         updateStatus();
       }
-      
-      // One-time click handler: resume audio context and request Notification permission
-      // This ensures the browser treats the permission request as a user gesture.
-      (function setupOneClickUnlock(){
-        async function oneClickHandler(){
-          if(audioCtx){
-            try{ await audioCtx.resume(); audioUnlocked = true; }catch(e){ /* ignore */ }
-          }
-          if ("Notification" in window && Notification.permission !== 'granted'){
-            try{ await requestPermission(); }catch(e){ /* ignore */ }
-          }
-          // remove handler — we only need one user gesture
-          document.removeEventListener('click', oneClickHandler);
-        }
-        document.addEventListener('click', oneClickHandler, {once: true});
-      })();
-
-      function updateStatus(){
-        const supportEl = document.getElementById('notifSupport');
-        const permEl = document.getElementById('notifPerm');
-        const secureEl = document.getElementById('secureCtx');
-        if(supportEl) supportEl.textContent = ("Notification" in window) ? 'yes' : 'no';
-        if(permEl) permEl.textContent = ("Notification" in window) ? Notification.permission : 'n/a';
-        if(secureEl) secureEl.textContent = (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'yes' : 'no';
-      }
-
-      // update UI status initially and after permission changes
-      updateStatus();
-
-      async function fetchUpcoming(debug=false){
+      if ("Notification" in window && Notification.permission === 'granted'){
         try{
-          const url = '{% url "api_upcoming_reminders" %}' + (debug ? '?debug=1' : '');
-          const resp = await fetch(url, {credentials: 'same-origin', cache: 'no-store'});
-          if(!resp.ok){
-            const txt = await resp.text().catch(()=>'<no response body>');
-            console.error('fetch upcoming non-ok', resp.status, txt);
-            const status = document.getElementById('notificationStatus');
-            if(status) status.innerHTML = '<div class="alert alert-danger">Fetch error: '+resp.status+'</div>';
-            return;
-          }
-          let data;
-          try{
-            data = await resp.json();
-          }catch(e){
-            console.error('invalid JSON from upcoming_reminders', e);
-            const status = document.getElementById('notificationStatus');
-            if(status) status.innerHTML = '<div class="alert alert-danger">Invalid server response (not JSON)</div>';
-            return;
-          }
-          if(!data.reminders) return;
-              console.log('upcoming fetch status', resp.status);
-              console.log('upcoming data', data);
-              try{ document.getElementById('notificationDebug').style.display = 'block'; }catch(e){}
-              try{ document.getElementById('lastCheck').textContent = new Date().toLocaleString(); }catch(e){}
-              try{ document.getElementById('lastCount').textContent = (data.reminders || []).length; }catch(e){}
-              (data.reminders || []).forEach(async (r) => {
-            // show browser notification
-            if ("Notification" in window){
-              if(Notification.permission === 'granted'){
-                try{
-                  const n = new Notification(r.title, { body: r.dosage || '', tag: 'rem-'+r.id });
-                  // attach handlers to observe behavior
-                  n.onshow = () => console.log('Notification shown for', r.id);
-                  n.onerror = (e) => console.error('Notification error', e, r.id);
-                  n.onclick = () => { console.log('Notification clicked', r.id); window.focus(); };
-                }catch(e){
-                  console.error('creating Notification failed', e);
-                }
-              } else if(Notification.permission === 'denied'){
-                console.warn('Notification permission denied — please enable in browser settings');
-                // show an in-page hint to the user
-                const status = document.getElementById('notificationStatus');
-                if(status){
-                  status.innerHTML = '<div class="alert alert-warning">Notifications are <strong>blocked</strong> in your browser. Enable them in site settings (click the lock icon in the address bar).</div>';
-                }
-              } else {
-                // not granted yet — request in response to user gesture if possible
-                try{ await Notification.requestPermission(); updateStatus(); }catch(e){ console.warn('requestPermission failed', e); }
-              }
-            } else {
-              console.warn('Notifications API not supported in this browser');
-            }
-
-            // in-page popup: if the server marked this reminder in-window, show modal alert
-            try{
-              if(r.in_window){
-                const modalTitle = document.getElementById('reminderModalLabel');
-                const modalText = document.getElementById('reminderModalText');
-                const modalTime = document.getElementById('reminderModalTime');
-                if(modalTitle && modalText){
-                  modalTitle.textContent = r.title || 'Reminder';
-                  modalText.textContent = r.dosage || '';
-                  modalTime.textContent = (r.datetime ? new Date(r.datetime).toLocaleString() : '');
-                  // show bootstrap modal
-                  try{
-                    var remModal = new bootstrap.Modal(document.getElementById('reminderModal'));
-                    remModal.show();
-                  }catch(e){
-                    // fallback to simple alert
-                    alert((r.title || 'Reminder') + '\n' + (r.dosage || ''));
-                  }
-                }
-              }
-            }catch(e){ console.warn('popup error', e); }
-
-            // try to play sound: prefer audio element then WebAudio beep
-            playSoundFallback();
-
-            // mark as notified so it doesn't repeat
-            try{
-              if(r.in_window || !debug){
-                fetch('{% url "api_mark_notified" 0 %}'.replace('/0/', '/'+r.id+'/'), {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, credentials: 'same-origin'});
-              }
-            }catch(e){ console.warn('mark-notified failed', e); }
-          });
-          // debug output removed in production build
-        }catch(e){
-          console.error('upcoming fetch error', e);
+          new Notification('Test Reminder', { body: 'This is a test alarm.' });
+        } catch(e){
+          updateStatus('Test notification failed: '+ (e && e.message ? e.message : e));
         }
+      } else {
+        try{
+          var remModal = new bootstrap.Modal(document.getElementById('reminderModal'));
+          document.getElementById('reminderModalLabel').textContent = 'Test Reminder';
+          document.getElementById('reminderModalText').textContent = 'This is a test alarm.';
+          document.getElementById('reminderModalTime').textContent = new Date().toLocaleString();
+          remModal.show();
+        } catch(e){}
       }
+      playSoundFallback();
+      testBtn.textContent = 'Test Sent';
+      setTimeout(()=>{ testBtn.textContent = 'Test Alert'; }, 1500);
+    });
+  }
 
-          // show-all feature removed
+  // start polling
+  fetchUpcoming();
+  setInterval(fetchUpcoming, pollInterval);
+})();
+</script>
 
-      function getCookie(name) {
-        const value = `; ${document.cookie}`;
-        const parts = value.split(`; ${name}=`);
-        if (parts.length === 2) return parts.pop().split(';').shift();
-      }
-
-      // Unlock audio & request notification permission on button click (user gesture)
-      const enableBtn = document.getElementById('enableAlerts');
-      if(enableBtn){
-        enableBtn.addEventListener('click', async function(){
-          if(audioCtx){
-            try{
-              await audioCtx.resume();
-              audioUnlocked = true;
-            }catch(e){
-              console.warn('audio resume failed', e);
-            }
-          }
-          if ("Notification" in window) await Notification.requestPermission();
-          updateStatus();
-          // give immediate feedback
-          enableBtn.textContent = 'Alerts Enabled';
-          enableBtn.disabled = true;
-        });
-      }
-
-      // Test alert button to immediately show a notification + sound (useful to verify permissions)
-      const testBtn = document.getElementById('testAlert');
-      if(testBtn){
-        testBtn.addEventListener('click', async function(){
-          if ("Notification" in window && Notification.permission !== 'granted'){
-            await Notification.requestPermission();
-          }
-          if ("Notification" in window && Notification.permission === 'granted'){
-            new Notification('Test Reminder', { body: 'This is a test alarm.' });
-          }
-          playSoundFallback();
-          // visual feedback
-          testBtn.textContent = 'Test Sent';
-          setTimeout(()=>{ testBtn.textContent = 'Test Alert'; }, 1500);
-        });
-      }
-
-      // debug fetch removed from UI
-
-      // start
-      // do not request permission automatically on load; it will be requested on first user click
-      fetchUpcoming();
-      setInterval(fetchUpcoming, pollInterval);
-    })();
-    </script>
-
-    </body>
-    </html>
+</body>
+</html>
