@@ -274,7 +274,8 @@
         if (notifiedIds.has(id)){
           // best-effort: mark notified on server
           try{
-            fetch('{% url "api_mark_notified" 0 %}'.replace('/0/', '/' + id + '/'), {
+            const markUrl = '{% url "api_mark_notified" 999 %}'.replace('999', id);
+            fetch(markUrl, {
               method: 'POST',
               headers: { 'X-CSRFToken': getCookie('csrftoken') },
               credentials: 'same-origin'
@@ -324,7 +325,8 @@
         persistNotified();
 
         try{
-          fetch('{% url "api_mark_notified" 0 %}'.replace('/0/', '/' + id + '/'), {
+          const markUrl = '{% url "api_mark_notified" 999 %}'.replace('999', id);
+          fetch(markUrl, {
             method: 'POST',
             headers: { 'X-CSRFToken': getCookie('csrftoken') },
             credentials: 'same-origin'

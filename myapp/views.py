@@ -182,28 +182,38 @@ def api_upcoming_reminders(request):
     window_start = now - timedelta(minutes=5)
     window_end = now + timedelta(minutes=5)
     
-    # Filter reminders for current user (either direct owner or via member)
+    # Get all un-notified reminders for current user
     reminders = Reminder.objects.filter(
         Q(user=request.user) | Q(member__user=request.user),
-        datetime__gte=window_start,
-        datetime__lte=window_end,
-        is_notified=False  # only return un-notified reminders
+        is_notified=False
     ).values(
         'id', 'medicine_name', 'dosage', 'datetime', 'date', 'time'
     )
     
     reminder_list = []
     for r in reminders:
-        reminder_list.append({
-            'id': r['id'],
-            'title': r['medicine_name'],
-            'dosage': r['dosage'],
-            'datetime': r['datetime'].isoformat() if r['datetime'] else None,
-            'date': str(r['date']) if r['date'] else None,
-            'time': str(r['time']) if r['time'] else None,
-            'pk': r['id'],
-            'reminder_id': r['id']
-        })
+        # Construct datetime from date+time if datetime field is empty
+        rem_datetime = r['datetime']
+        if not rem_datetime and r['date'] and r['time']:
+            try:
+                from datetime import datetime as dt
+                naive_dt = dt.combine(r['date'], r['time'])
+                rem_datetime = timezone.make_aware(naive_dt, timezone.get_current_timezone())
+            except Exception:
+                rem_datetime = None
+        
+        # Check if reminder is within the ±5 min window
+        if rem_datetime and window_start <= rem_datetime <= window_end:
+            reminder_list.append({
+                'id': r['id'],
+                'title': r['medicine_name'],
+                'dosage': r['dosage'],
+                'datetime': rem_datetime.isoformat() if rem_datetime else None,
+                'date': str(r['date']) if r['date'] else None,
+                'time': str(r['time']) if r['time'] else None,
+                'pk': r['id'],
+                'reminder_id': r['id']
+            })
     
     debug = request.GET.get('debug', '0') == '1'
     response_data = reminder_list if not debug else {
